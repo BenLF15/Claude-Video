@@ -1,0 +1,165 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:#000}canvas{display:block}</style>
+</head><body><canvas id="c"></canvas>
+<script>
+// Procedural "AR hologram" wallpaper. Parameters come from the URL hash:
+//   #mode=lock|home&size=2732
+const P = Object.fromEntries(new URLSearchParams(location.search.slice(1)));
+const MODE = P.mode || 'lock';
+const S = +(P.size || 2732);
+const cv = document.getElementById('c');
+cv.width = S; cv.height = S;
+const g = cv.getContext('2d');
+const W = S, H = S, cx = W / 2;
+
+// deterministic RNG
+let seed = 7331;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+const TEAL = [64, 224, 208], CYAN = [120, 200, 255], VIOLET = [130, 110, 255];
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const dim = MODE === 'home' ? 0.5 : 1;          // home screen: calmer
+const objY = H * (MODE === 'home' ? 0.48 : 0.52);
+const R = S * (MODE === 'home' ? 0.10 : 0.135); // hologram radius
+
+// ---------- 1. deep background ----------
+let bg = g.createRadialGradient(cx, objY, 0, cx, objY, S * 0.8);
+bg.addColorStop(0, '#0b1a26'); bg.addColorStop(0.45, '#060d16'); bg.addColorStop(1, '#020408');
+g.fillStyle = bg; g.fillRect(0, 0, W, H);
+
+// soft nebula clouds
+g.globalCompositeOperation = 'lighter';
+for (const [x, y, r, c, a] of [
+  [0.25, 0.30, 0.45, VIOLET, 0.07], [0.78, 0.38, 0.40, TEAL, 0.06],
+  [0.50, 0.58, 0.30, CYAN, 0.08], [0.15, 0.80, 0.35, TEAL, 0.035]]) {
+  const n = g.createRadialGradient(W * x, H * y, 0, W * x, H * y, S * r);
+  n.addColorStop(0, rgba(c, a * dim)); n.addColorStop(1, rgba(c, 0));
+  g.fillStyle = n; g.fillRect(0, 0, W, H);
+}
+
+// ---------- 2. perspective grid floor ----------
+const horizon = H * 0.75, camH = H * 0.9, focal = S * 0.9;
+g.lineWidth = S / 1800;
+for (let i = -40; i <= 40; i++) {               // lines toward vanishing point
+  const xFar = cx + i * S * 0.012, xNear = cx + i * S * 0.32;
+  const lg = g.createLinearGradient(0, horizon, 0, H);
+  lg.addColorStop(0, rgba(TEAL, 0)); lg.addColorStop(0.35, rgba(TEAL, 0.10 * dim));
+  lg.addColorStop(1, rgba(TEAL, 0.22 * dim));
+  g.strokeStyle = lg; g.beginPath(); g.moveTo(xFar, horizon); g.lineTo(xNear, H * 1.6); g.stroke();
+}
+for (let z = 1; z < 60; z++) {                  // depth lines
+  const d = Math.pow(z, 1.6) * 0.06;
+  const y = horizon + (camH - horizon) * 0.35 / d * 0.25;
+  if (y > H) continue;
+  const t = (y - horizon) / (H - horizon);
+  g.strokeStyle = rgba(TEAL, Math.min(0.22, t * 0.3) * dim);
+  g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+}
+// horizon glow
+let hz = g.createLinearGradient(0, horizon - S * 0.03, 0, horizon + S * 0.03);
+hz.addColorStop(0, rgba(CYAN, 0)); hz.addColorStop(0.5, rgba(CYAN, 0.10 * dim)); hz.addColorStop(1, rgba(CYAN, 0));
+g.fillStyle = hz; g.fillRect(0, horizon - S * 0.03, W, S * 0.06);
+
+// ---------- 3. hologram: wireframe sphere + orbital rings ----------
+const tiltX = -0.38, rotY = 0.55;
+function proj(x, y, z) {                        // rotate & project a unit-sphere point
+  let x1 = x * Math.cos(rotY) + z * Math.sin(rotY), z1 = -x * Math.sin(rotY) + z * Math.cos(rotY);
+  let y1 = y * Math.cos(tiltX) - z1 * Math.sin(tiltX), z2 = y * Math.sin(tiltX) + z1 * Math.cos(tiltX);
+  const p = 3.2 / (3.2 - z2);
+  return [cx + x1 * R * p, objY + y1 * R * p, z2];
+}
+function strokePath(pts, col, a, lw) {
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0, z0] = pts[i - 1], [x1, y1, z1] = pts[i];
+    const depth = (z0 + z1) / 2;                // back side fainter
+    g.strokeStyle = rgba(col, a * (depth > 0 ? 1 : 0.28) * dim);
+    g.lineWidth = lw; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+  }
+}
+
+// core glow
+let core = g.createRadialGradient(cx, objY, 0, cx, objY, R * 1.6);
+core.addColorStop(0, rgba(CYAN, 0.30 * dim)); core.addColorStop(0.35, rgba(TEAL, 0.10 * dim)); core.addColorStop(1, rgba(TEAL, 0));
+g.fillStyle = core; g.fillRect(cx - R * 2, objY - R * 2, R * 4, R * 4);
+
+g.shadowColor = rgba(TEAL, 0.9); g.shadowBlur = S / 220;
+for (let lat = -75; lat <= 75; lat += 15) {     // latitudes
+  const pts = []; const phi = lat * Math.PI / 180;
+  for (let k = 0; k <= 120; k++) { const th = k / 120 * Math.PI * 2;
+    pts.push(proj(Math.cos(phi) * Math.cos(th), Math.sin(phi), Math.cos(phi) * Math.sin(th))); }
+  strokePath(pts, TEAL, lat === 0 ? 0.75 : 0.42, S / (lat === 0 ? 900 : 1500));
+}
+for (let lon = 0; lon < 180; lon += 15) {       // longitudes
+  const pts = []; const th = lon * Math.PI / 180;
+  for (let k = 0; k <= 120; k++) { const phi = k / 120 * Math.PI * 2;
+    pts.push(proj(Math.cos(phi) * Math.cos(th), Math.sin(phi), Math.cos(phi) * Math.sin(th))); }
+  strokePath(pts, CYAN, 0.32, S / 1600);
+}
+
+// orbital rings (tilted ellipses with travelling nodes)
+const rings = [[1.55, 0.28, -0.20, CYAN, 0.55], [1.95, 0.20, 0.12, TEAL, 0.38], [2.45, 0.16, -0.05, VIOLET, 0.30]];
+for (const [rr, flat, rot, col, a] of rings) {
+  const rx = R * rr, ry = R * rr * flat;
+  g.save(); g.translate(cx, objY); g.rotate(rot);
+  g.shadowColor = rgba(col, 1); g.shadowBlur = S / 160;
+  // front half brighter, back half faint (passes behind sphere)
+  g.lineWidth = S / 1100;
+  g.strokeStyle = rgba(col, a * 0.35 * dim); g.beginPath(); g.ellipse(0, 0, rx, ry, 0, Math.PI, Math.PI * 2); g.stroke();
+  g.strokeStyle = rgba(col, a * dim);       g.beginPath(); g.ellipse(0, 0, rx, ry, 0, 0, Math.PI); g.stroke();
+  for (let n = 0; n < 3; n++) {
+    const t = rnd() * Math.PI;              // nodes on the front arc
+    const px = rx * Math.cos(t), py = ry * Math.sin(t);
+    const ng = g.createRadialGradient(px, py, 0, px, py, S / 110);
+    ng.addColorStop(0, rgba([255, 255, 255], 0.95 * dim)); ng.addColorStop(0.25, rgba(col, 0.7 * dim)); ng.addColorStop(1, rgba(col, 0));
+    g.fillStyle = ng; g.beginPath(); g.arc(px, py, S / 110, 0, Math.PI * 2); g.fill();
+  }
+  g.restore();
+}
+g.shadowBlur = 0;
+
+// ---------- 4. HUD arcs (calm, segmented) ----------
+function arc(r, a0, a1, col, a, lw, dash) {
+  g.setLineDash(dash || []); g.strokeStyle = rgba(col, a * dim); g.lineWidth = lw;
+  g.beginPath(); g.arc(cx, objY, r, a0, a1); g.stroke(); g.setLineDash([]);
+}
+const D = Math.PI / 180;
+arc(R * 2.95, -150 * D, -30 * D, TEAL, 0.22, S / 1400);
+arc(R * 3.05, -140 * D, -40 * D, CYAN, 0.18, S / 700, [S / 400, S / 160]);
+arc(R * 2.95, 25 * D, 155 * D, TEAL, 0.10, S / 1400);
+for (let k = 0; k < 72; k++) {                   // tick ring
+  const t = k * 5 * D, big = k % 6 === 0;
+  const r0 = R * 3.2, r1 = r0 + (big ? R * 0.12 : R * 0.05);
+  g.strokeStyle = rgba(CYAN, (big ? 0.28 : 0.12) * dim); g.lineWidth = S / 1600;
+  g.beginPath(); g.moveTo(cx + Math.cos(t) * r0, objY + Math.sin(t) * r0);
+  g.lineTo(cx + Math.cos(t) * r1, objY + Math.sin(t) * r1); g.stroke();
+}
+
+// floor reflection / light pool under the hologram
+const fy = horizon + (H - horizon) * 0.12;
+let pool = g.createRadialGradient(cx, fy, 0, cx, fy, R * 2.6);
+pool.addColorStop(0, rgba(TEAL, 0.22 * dim)); pool.addColorStop(1, rgba(TEAL, 0));
+g.save(); g.translate(cx, fy); g.scale(1, 0.22); g.translate(-cx, -fy);
+g.fillStyle = pool; g.beginPath(); g.arc(cx, fy, R * 2.6, 0, Math.PI * 2); g.fill(); g.restore();
+// ---------- 5. particles with depth ----------
+for (let i = 0; i < (MODE === 'home' ? 260 : 420); i++) {
+  const z = rnd(), x = rnd() * W, y = rnd() * H * 0.95;
+  const r = (0.6 + z * z * 5) * S / 2732, a = (0.08 + z * 0.55) * dim;
+  const col = rnd() < 0.7 ? CYAN : (rnd() < 0.5 ? TEAL : VIOLET);
+  if (z > 0.93) {                                 // bokeh (close to camera)
+    const b = g.createRadialGradient(x, y, 0, x, y, r * 6);
+    b.addColorStop(0, rgba(col, a * 0.35)); b.addColorStop(1, rgba(col, 0));
+    g.fillStyle = b; g.beginPath(); g.arc(x, y, r * 6, 0, Math.PI * 2); g.fill();
+  } else { g.fillStyle = rgba(col, a); g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); }
+}
+g.globalCompositeOperation = 'source-over';
+
+// ---------- 6. vignette + grain ----------
+let vg = g.createRadialGradient(cx, H * 0.5, S * 0.3, cx, H * 0.5, S * 0.78);
+vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, `rgba(0,0,0,${MODE === 'home' ? 0.75 : 0.6})`);
+g.fillStyle = vg; g.fillRect(0, 0, W, H);
+const img = g.getImageData(0, 0, W, H), d = img.data;
+for (let i = 0; i < d.length; i += 4) { const n = (rnd() - 0.5) * 7; d[i] += n; d[i + 1] += n; d[i + 2] += n; }
+g.putImageData(img, 0, 0);
+document.title = 'done';
+</script></body></html>
